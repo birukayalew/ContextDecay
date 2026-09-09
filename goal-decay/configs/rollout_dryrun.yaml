@@ -1,0 +1,58 @@
+# Dry run before committing GPU hours to full generation.
+# Per instructions: retail only, 5 tasks, 1 trial, verify schema before scaling up.
+
+experiment: rollout_dryrun
+seed: 0
+
+model:
+  name: Qwen/Qwen3.8-27B
+  # Confirmed 2026-09: 27B dense (hybrid attention: 48 linear + 16 full),
+  # Apache 2.0, 262144 native context, bf16 ~55.6GB / 18 shards, 64 layers,
+  # hidden size 5120. Only the Qwen org HF repo is genuine.
+  revision: null   # pin to a specific HF commit/tag once confirmed on the server; do not leave null for the full run
+
+serving:
+  backend: vllm
+  temperature: 0.7
+  max_context: 262144   # native window; actual budget for Phase 5 window-scaling arm is separate (32K/128K/262K)
+
+benchmark:
+  name: tau2-bench
+  repo: sierra-research/tau2-bench
+  # MUST be filled in with the exact commit hash checked out on the server
+  # before the dry run, and again confirmed unchanged before the full run.
+  # Protocol requirement: all 2,000 trajectories come from one named version.
+  pinned_commit: null
+  install_note: "uv sync, NOT pip install -e . -- needs Python >=3.12,<3.14"
+  cli_template: "tau2 run --domain {domain} --agent-llm {agent_llm} --user-llm {user_llm} --num-trials {num_trials} --num-tasks {num_tasks}"
+
+domains: [retail]   # dry run: retail only. Full run: [retail, airline, telecom]
+
+dry_run:
+  num_tasks: 5
+  num_trials: 1
+
+full_run:
+  num_trials: 5   # seeds 0-4, per protocol §2.4
+  # num_tasks omitted = all tasks in domain
+
+logging:
+  # Protocol §2.4 required per-step fields -- the dry run's job is to
+  # verify every one of these is actually populated, not just present as a key.
+  required_step_fields:
+    - step_idx
+    - cumulative_tokens
+    - tokens_added_this_step
+    - tool_name
+    - tool_errored
+    - message_role
+  required_trajectory_fields:
+    - task_id
+    - domain
+    - seed
+    - goal_text
+    - full_message_list
+    - programmatic_reward   # from tau2-bench's own grading, 1/0
+
+output_dir: results/rollout_dryrun
+raw_trajectories_path: data/raw/trajectories_dryrun.jsonl
