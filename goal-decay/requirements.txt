@@ -1,0 +1,20 @@
+# CPU-only subset needed for local work (Windows dev machine):
+#   - Gate K1 (cosine baseline)
+#   - ledger / splits / config unit tests
+#   - eval / stats utilities
+numpy
+scipy
+scikit-learn
+pyyaml
+sentence-transformers
+pytest
+
+# ---------------------------------------------------------------------------
+# GPU-only, install on the remote server, NOT here:
+#   vllm
+#   transformers
+#   torch (CUDA build matching the server's driver)
+#   accelerate
+#   safetensors
+# See README_REMOTE.md for the exact commands to hand to the GPU server.
+# ---------------------------------------------------------------------------

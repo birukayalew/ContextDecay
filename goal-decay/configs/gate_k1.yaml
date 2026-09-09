@@ -1,0 +1,30 @@
+# Gate K1 -- cosine-similarity baseline (protocol §3)
+# Pre-registered thresholds. Do not edit after first run against real data;
+# if you must change them, commit the change with a note explaining why,
+# and keep the old run's results/ directory for comparison.
+
+experiment: gate_k1
+seed: 0
+
+embedder:
+  # Any off-the-shelf sentence embedder, per protocol §3.1. Swap freely --
+  # the point is that it is NOT the target model and NOT trained by us.
+  name: sentence-transformers/all-mpnet-base-v2
+
+progress_fractions: [0.25, 0.50, 0.75, 1.00]
+
+decision_thresholds:
+  # Fixed BEFORE seeing results, per protocol §3.2.
+  proceed_below: 0.60      # AUROC@50% < 0.60 -> proceed, this becomes headline baseline
+  reconsider_at_or_above: 0.65   # AUROC@50% >= 0.65 -> project must beat it by +0.05 non-overlapping CI, else stop
+  # In between [0.60, 0.65): proceed, but probe bar = this number + 0.05
+
+bootstrap:
+  n_resamples: 10000
+  cluster_by: task_id   # never resample steps independently
+
+data:
+  trajectories_path: data/raw/trajectories.jsonl
+  split_path: data/splits/split_random.json
+
+output_dir: results/gate_k1

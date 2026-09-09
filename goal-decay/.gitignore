@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Large generated artifacts stay out of git; frozen splits are the exception
+# (protocol §2.5: split files ARE committed).
+data/raw/*
+!data/raw/.gitkeep
+data/activations/*
+!data/activations/.gitkeep
+results/*
+!results/.gitkeep
+
+.ipynb_checkpoints/
+.DS_Store
+Thumbs.db
