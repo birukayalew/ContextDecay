@@ -77,7 +77,7 @@ git checkout 2174a603f6d014ef94473ffa95957f6ce27100db  # or verify HEAD is alrea
 git apply /path/to/goal-decay/configs/tau2_bench.patch
 ```
 
-This patch does two things, both required:
+This patch does three things, all required:
 1. Adds `websockets` to `pyproject.toml` — without it, `import tau2` itself
    crashes (`tau2/__init__.py` unconditionally imports a voice/audio-native
    module that needs `websockets`, even though we never use `--audio-native`).
@@ -86,9 +86,23 @@ This patch does two things, both required:
    NL-assertions evaluator (marked "experimental/WIP" in its own
    `AGENTS.md`) grades some tasks' natural-language criteria via a
    hardcoded LLM call with no CLI/env override — left at the default it
-   requires a real `OPENAI_API_KEY` and silently fails 3/5 dry-run tasks
-   with `infrastructure_error`. Patched to reuse our own hosted model
-   instead of requiring a paid external API key.
+   requires a real `OPENAI_API_KEY` and fails 3/5 dry-run tasks with
+   `infrastructure_error` / `litellm.AuthenticationError`.
+3. Adds `"response_format": {"type": "json_object"}` to
+   `DEFAULT_LLM_NL_ASSERTIONS_ARGS`. Fix #2 alone still left 3/5 tasks
+   failing — the evaluator does `json.loads(assistant_message.content)`
+   on the grading call's raw response with no structured-output
+   enforcement, relying only on a prompt instruction to "respond in pure
+   JSON." GPT-4.1 follows that reliably; Qwen3.8-27B does not without
+   explicit JSON-mode enforcement (it emits reasoning text inline before
+   any answer, breaking `json.loads`). Failure mode was
+   `infrastructure_error` / `json.decoder.JSONDecodeError: Expecting
+   value: line 1 column 1 (char 0)`.
+
+**Verified 2026-09-17: with all three fixes applied, a 5-task retail dry
+run (`--num-tasks 5 --num-trials 1`) completed 5/5 with zero infrastructure
+errors**, 100% DB match, all normal terminations. Per-task duration
+ranged ~55–105s (avg ~80s) with tau2's default concurrency of 3.
 
 Then install:
 ```bash

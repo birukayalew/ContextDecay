@@ -27,7 +27,7 @@ benchmark:
   # Local patch required on top of the pinned commit -- see
   # tau2_bench.patch in this directory. Apply with:
   #   cd <tau2-bench checkout> && git apply <path>/tau2_bench.patch
-  # Two changes, both required before any trajectory generation:
+  # Three changes, all required before any trajectory generation:
   #   1. Add `websockets` to pyproject.toml deps -- tau2/__init__.py
   #      unconditionally imports from tau2.voice.audio_native.openai.provider,
   #      which imports websockets even though we never use --audio-native.
@@ -43,6 +43,18 @@ benchmark:
   #      to avoid a second, closed-source model silently entering the
   #      grading path. Discovered when 3/5 dry-run tasks failed with
   #      infrastructure_error / litellm.AuthenticationError.
+  #   3. DEFAULT_LLM_NL_ASSERTIONS_ARGS: added
+  #      "response_format": {"type": "json_object"}. The evaluator does
+  #      `json.loads(assistant_message.content)` on the grading call's raw
+  #      response with no structured-output enforcement -- GPT-4.1 follows
+  #      a "respond in pure JSON" prompt instruction reliably enough that
+  #      upstream never needed enforcement, but Qwen3.8-27B does not
+  #      without it (emits reasoning text inline, breaking json.loads).
+  #      Discovered when fix #2 alone still left 3/5 dry-run tasks failing
+  #      with infrastructure_error / json.decoder.JSONDecodeError:
+  #      "Expecting value: line 1 column 1 (char 0)". With all three fixes
+  #      applied, a 5-task retail dry run completed 5/5 with zero infra
+  #      errors (verified 2026-09-17).
   patch_applied: true
 
 domains: [retail]   # dry run: retail only. Full run: [retail, airline, telecom]
