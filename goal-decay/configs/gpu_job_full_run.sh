@@ -56,9 +56,20 @@ echo "[job] started: $(date -Iseconds)"
 # --- Start vLLM server in the background ---
 # --tensor-parallel-size 2 splits the model across both A100s (required:
 # a single A100's 40GB cannot hold the ~55.6GB bf16 model alone).
+#
+# --max-model-len 65536: first attempt on 2x A100 with the native
+# 262144 context failed -- ValueError: 8.16 GiB KV cache needed vs 8.12
+# GiB available (razor-thin shortfall, A100's 40GB leaves far less
+# headroom after model weights than the H200's 140GB we prototyped on).
+# Capping context at 64K instead of bumping gpu-memory-utilization to
+# the edge: no observed tau2-bench retail/airline/telecom trajectory
+# has come anywhere near this length (longest seen so far: <10K
+# tokens), and the freed KV cache also gives real headroom for
+# concurrency=8 rather than leaving none.
 vllm serve models/Qwen3.8-27B --served-model-name Qwen/Qwen3.8-27B \
     --host 0.0.0.0 --port 8000 --dtype bfloat16 \
     --tensor-parallel-size 2 \
+    --max-model-len 65536 \
     --enable-auto-tool-choice --tool-call-parser qwen3_xml \
     > "${PROJECT_ROOT}/logs/vllm_server_${SLURM_JOB_ID}.log" 2>&1 &
 VLLM_PID=$!

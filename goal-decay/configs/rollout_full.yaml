@@ -27,7 +27,15 @@ model:
 serving:
   backend: vllm
   temperature: 0.7
-  max_context: 262144
+  # Capped at 65536 (not the native 262144) for the actual full-run
+  # hardware: 2x A100 (40GB each, tensor-parallel) has far less KV cache
+  # headroom than the H200 (140GB) used for earlier timing/dry-run
+  # tests. A 262144 max_model_len left only 8.12 GiB of the 8.16 GiB KV
+  # cache needed for even one full-length request on 2x A100 --
+  # confirmed by a real vllm serve failure (ValueError from
+  # kv_cache_utils.py). No observed trajectory has approached 64K
+  # tokens, and the freed KV cache gives real headroom for concurrency=8.
+  max_context: 65536
 
 benchmark:
   name: tau2-bench
