@@ -86,8 +86,10 @@ def get_tau2_commit(repo_path: str) -> str:
     return out.stdout.strip()
 
 
-def run_tau2(domain: str, agent_llm: str, user_llm: str, num_tasks: int | None,
-             tau2_repo_path: str, seed: int, save_to: str) -> str:
+def run_tau2(domain: str, agent_llm: str, user_llm: str,
+             tau2_repo_path: str, seed: int, save_to: str,
+             num_tasks: int | None = None, task_ids: list[str] | None = None,
+             concurrency: int | None = None) -> str:
     """Invoke `tau2 run` for one domain/seed. Returns the path to the
     results.json it writes (data/simulations/<save_to>/results.json,
     resolved relative to tau2_repo_path since tau2 writes there).
@@ -98,7 +100,19 @@ def run_tau2(domain: str, agent_llm: str, user_llm: str, num_tasks: int | None,
     --enable-auto-tool-choice --tool-call-parser qwen3_xml (confirmed
     correct parser for Qwen3.8-27B / Qwen3_5ForConditionalGeneration --
     NOT hermes, which is for a different tool-call format).
+
+    Pass exactly one of num_tasks or task_ids. task_ids is preferred for
+    any domain with more tasks than we intend to sample: tau2-bench's
+    --num-tasks does tasks[:num_tasks], a plain deterministic slice in
+    file order (verified against src/tau2/runner/helpers.py) -- NOT a
+    random or representative sample, and NOT seed-dependent. For a
+    domain like telecom (2,285 tasks), "first N in file order" risks
+    systematic bias; task_ids lets us pass our own pre-sampled,
+    documented, git-committed set (see sample_tasks.py).
     """
+    if num_tasks is not None and task_ids is not None:
+        raise ValueError("pass at most one of num_tasks, task_ids")
+
     cmd = [
         "uv", "run", "tau2", "run",
         "--domain", domain,
@@ -110,6 +124,10 @@ def run_tau2(domain: str, agent_llm: str, user_llm: str, num_tasks: int | None,
     ]
     if num_tasks is not None:
         cmd += ["--num-tasks", str(num_tasks)]
+    if task_ids is not None:
+        cmd += ["--task-ids"] + list(task_ids)
+    if concurrency is not None:
+        cmd += ["--max-concurrency", str(concurrency)]
 
     print(f"[rollout] running: {' '.join(cmd)}", file=sys.stderr)
     result = subprocess.run(cmd, cwd=tau2_repo_path, capture_output=True, text=True)
@@ -240,6 +258,20 @@ def main():
     run_cfg = cfg["dry_run"] if is_dry_run else cfg["full_run"]
     num_trials = run_cfg.get("num_trials", 1)
     num_tasks = run_cfg.get("num_tasks")
+    concurrency = run_cfg.get("concurrency")
+
+    sampled_task_ids: dict[str, list[str]] = {}
+    sample_file = run_cfg.get("sampled_task_ids_file")
+    if sample_file is not None:
+        if num_tasks is not None:
+            raise ValueError(
+                "config sets both num_tasks and sampled_task_ids_file -- "
+                "pass at most one. sampled_task_ids_file takes precedence "
+                "for reproducible, non-file-order-biased sampling."
+            )
+        with open(sample_file, "r", encoding="utf-8") as f:
+            sample_data = json.load(f)
+        sampled_task_ids = sample_data["sampled_task_ids"]
 
     out_path = cfg["raw_trajectories_path"]
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -257,13 +289,16 @@ def main():
     n_written = 0
     with open(out_path, "w", encoding="utf-8") as out_f:
         for domain in cfg["domains"]:
+            domain_task_ids = sampled_task_ids.get(domain) if sampled_task_ids else None
             for seed in range(num_trials):
                 save_to = f"{run_tag}_{domain}_seed{seed}_{uuid.uuid4().hex[:8]}"
                 results_path = run_tau2(
                     domain=domain,
                     agent_llm=agent_llm,
                     user_llm=user_llm,
-                    num_tasks=num_tasks,
+                    num_tasks=num_tasks if domain_task_ids is None else None,
+                    task_ids=domain_task_ids,
+                    concurrency=concurrency,
                     tau2_repo_path=args.tau2_repo_path,
                     seed=seed,
                     save_to=save_to,

@@ -1,0 +1,72 @@
+# Full Phase 0 corpus generation (protocol §2.4).
+#
+# Balanced design decided 2026-09-17: airline has only 50 tasks natively
+# in tau2-bench (vs retail=114, telecom=2285), which sets the ceiling for
+# equal per-domain sampling. Using more tasks in retail/telecom would
+# reintroduce the domain-size confound the protocol's cross-domain split
+# (split_domain.json) depends on being absent. To hit the protocol's
+# >=2000 trajectory floor with equal task counts, seeds-per-task is
+# raised instead of task count: 50 tasks x 3 domains x 14 seeds = 2100.
+#
+# Task IDs are NOT the first N in file order -- see sample_tasks.py.
+# tau2-bench's --num-tasks does tasks[:num_tasks], a deterministic,
+# non-random, non-seed-dependent slice (verified against
+# src/tau2/runner/helpers.py). For telecom especially (2285 tasks) this
+# risks systematic bias, so task IDs are pre-sampled with a fixed logged
+# seed and passed via --task-ids instead. Run sample_tasks.py once
+# BEFORE this config is used, and commit its output
+# (configs/sampled_task_ids.json) -- never resample after seeing results.
+
+experiment: rollout_full
+seed: 0
+
+model:
+  name: Qwen/Qwen3.8-27B
+  revision: null
+
+serving:
+  backend: vllm
+  temperature: 0.7
+  max_context: 262144
+
+benchmark:
+  name: tau2-bench
+  repo: sierra-research/tau2-bench
+  pinned_commit: "2174a603f6d014ef94473ffa95957f6ce27100db"
+  install_note: "uv sync, NOT pip install -e . -- needs Python >=3.12,<3.14"
+  # Same three-part patch as the dry run -- see tau2_bench.patch and
+  # rollout_dryrun.yaml's comments for full rationale on each piece.
+  patch_applied: true
+
+domains: [retail, airline, telecom]
+
+full_run:
+  num_trials: 14   # seeds 0-13. protocol §2.4/§4.5 floor is 5; raised to
+                    # close the gap to >=2000 trajectories under balanced
+                    # per-domain task sampling (50/domain x 3 x 14 = 2100).
+  sampled_task_ids_file: configs/sampled_task_ids.json   # produced by sample_tasks.py, committed to git
+  concurrency: 8   # raised from tau2's default of 3 -- H200 KV cache
+                    # profiling during the dry run showed ~4.4x headroom
+                    # for full-length (262K token) concurrent requests;
+                    # our actual prompts are far shorter. Verify this
+                    # doesn't destabilize the server before committing to
+                    # the full run -- start a small batch first if unsure.
+
+logging:
+  required_step_fields:
+    - step_idx
+    - cumulative_tokens
+    - tokens_added_this_step
+    - tool_name
+    - tool_errored
+    - message_role
+  required_trajectory_fields:
+    - task_id
+    - domain
+    - seed
+    - goal_text
+    - full_message_list
+    - programmatic_reward
+
+output_dir: results/rollout_full
+raw_trajectories_path: data/raw/trajectories_full.jsonl
