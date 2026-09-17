@@ -5,14 +5,21 @@
 #SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=1-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --output=/share/agenticsystems/%u/project/logs/goaldecay_full_run_%j.out
 #SBATCH --error=/share/agenticsystems/%u/project/logs/goaldecay_full_run_%j.err
 
 # Full Phase 0 corpus generation (protocol §2.4). Runs unattended via
 # sbatch (NOT srun) since --qos gpu supports up to 3-day wall time,
-# unlike --qos short_gpu's 2-hour interactive cap. Requested 1 day here;
-# raise --time if the dry-run timing extrapolation undershoots.
+# unlike --qos short_gpu's 2-hour interactive cap.
+#
+# Time budget: estimated ~6.2hr from a small retail/telecom timing
+# sample (~85s/task avg at concurrency 8), but the frozen telecom sample
+# (configs/sampled_task_ids.json) skews toward complex multi-issue tasks
+# (7-8 stacked conditions) not represented in that timing sample --
+# requested 2 days generously rather than re-testing on the real sample.
+# The job exits on its own once generation finishes; the time limit is
+# just a ceiling, not a target.
 #
 # Usage: sbatch gpu_job_full_run.sh
 # Monitor: squeue -u $USER ; tail -f /share/agenticsystems/$USER/project/logs/goaldecay_full_run_<jobid>.out
