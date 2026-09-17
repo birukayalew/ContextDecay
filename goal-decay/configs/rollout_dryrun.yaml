@@ -24,6 +24,26 @@ benchmark:
   pinned_commit: "2174a603f6d014ef94473ffa95957f6ce27100db"
   install_note: "uv sync, NOT pip install -e . -- needs Python >=3.12,<3.14"
   cli_template: "tau2 run --domain {domain} --agent-llm {agent_llm} --user-llm {user_llm} --num-trials {num_trials} --num-tasks {num_tasks}"
+  # Local patch required on top of the pinned commit -- see
+  # tau2_bench.patch in this directory. Apply with:
+  #   cd <tau2-bench checkout> && git apply <path>/tau2_bench.patch
+  # Two changes, both required before any trajectory generation:
+  #   1. Add `websockets` to pyproject.toml deps -- tau2/__init__.py
+  #      unconditionally imports from tau2.voice.audio_native.openai.provider,
+  #      which imports websockets even though we never use --audio-native.
+  #      Without this the `tau2` CLI fails to import at all.
+  #   2. DEFAULT_LLM_NL_ASSERTIONS in config.py: "gpt-4.1-2025-04-14" ->
+  #      "hosted_vllm/Qwen/Qwen3.8-27B". The NL-assertions evaluator
+  #      (tau2/evaluator/evaluator_nl_assertions.py, marked
+  #      "experimental/WIP" in tau2's own AGENTS.md) calls this model to
+  #      grade natural-language evaluation criteria on some tasks. It is
+  #      hardcoded with no CLI/env override, and defaults to a real
+  #      OpenAI API call requiring OPENAI_API_KEY -- which we deliberately
+  #      do not want, both to keep the pipeline fully self-hosted/free and
+  #      to avoid a second, closed-source model silently entering the
+  #      grading path. Discovered when 3/5 dry-run tasks failed with
+  #      infrastructure_error / litellm.AuthenticationError.
+  patch_applied: true
 
 domains: [retail]   # dry run: retail only. Full run: [retail, airline, telecom]
 

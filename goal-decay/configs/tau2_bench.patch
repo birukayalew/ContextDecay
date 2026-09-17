@@ -1,0 +1,45 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 7782f30..7ca963d 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -33,6 +33,7 @@ dependencies = [
+     "requests>=2.31.0",
+     "numpy>=1.24.0",
+     "httpx>=0.24.0",
++    "websockets>=15.0.1",
+ ]
+
+ [project.optional-dependencies]
+diff --git a/src/tau2/config.py b/src/tau2/config.py
+index 388f7a9..c020d3f 100644
+--- a/src/tau2/config.py
++++ b/src/tau2/config.py
+@@ -21,7 +21,7 @@ DEFAULT_LLM_TEMPERATURE_USER = 0.0
+ DEFAULT_LLM_ARGS_AGENT = {"temperature": DEFAULT_LLM_TEMPERATURE_AGENT}
+ DEFAULT_LLM_ARGS_USER = {"temperature": DEFAULT_LLM_TEMPERATURE_USER}
+
+-DEFAULT_LLM_NL_ASSERTIONS = "gpt-4.1-2025-04-14"
++DEFAULT_LLM_NL_ASSERTIONS = "hosted_vllm/Qwen/Qwen3.8-27B"
+ DEFAULT_LLM_NL_ASSERTIONS_TEMPERATURE = 0.0
+ DEFAULT_LLM_NL_ASSERTIONS_ARGS = {"temperature": DEFAULT_LLM_NL_ASSERTIONS_TEMPERATURE}
+
+diff --git a/uv.lock b/uv.lock
+index e3812ca..d6b8287 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -2910,6 +2910,7 @@ dependencies = [
+     { name = "toml" },
+     { name = "typer" },
+     { name = "uvicorn" },
++    { name = "websockets" },
+ ]
+
+ [package.optional-dependencies]
+@@ -3057,6 +3058,7 @@ requires-dist = [
+     { name = "tqdm", marker = "extra == 'voice'", specifier = ">=4.0" },
+     { name = "typer", specifier = ">=0.12.5" },
+     { name = "uvicorn", specifier = ">=0.34.0" },
++    { name = "websockets", specifier = ">=15.0.1" },
+     { name = "websockets", marker = "extra == 'voice'", specifier = ">=13.0" },
+ ]
+ provides-extras = ["live", "voice", "knowledge", "gym", "dev", "experiments", "all"]
