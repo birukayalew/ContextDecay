@@ -19,10 +19,9 @@ serving:
 benchmark:
   name: tau2-bench
   repo: sierra-research/tau2-bench
-  # MUST be filled in with the exact commit hash checked out on the server
-  # before the dry run, and again confirmed unchanged before the full run.
+  # Pinned 2026-09-16 on the GPU server (Hazel cluster, NC State HPC).
   # Protocol requirement: all 2,000 trajectories come from one named version.
-  pinned_commit: null
+  pinned_commit: "2174a603f6d014ef94473ffa95957f6ce27100db"
   install_note: "uv sync, NOT pip install -e . -- needs Python >=3.12,<3.14"
   cli_template: "tau2 run --domain {domain} --agent-llm {agent_llm} --user-llm {user_llm} --num-trials {num_trials} --num-tasks {num_tasks}"
 

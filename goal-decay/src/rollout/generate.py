@@ -2,15 +2,68 @@
 requires vllm, tau2-bench (uv sync'd, pinned commit), and CUDA. Does NOT
 run on the Windows dev machine.
 
-Wraps `tau2 run` per domain/seed, parses tau2-bench's own trial logs, and
-re-emits one JSONL record per trajectory in the schema the rest of this
-repo expects (Gate K1, probes, ledger construction all read this format).
+Wraps `tau2 run` per domain/seed, parses tau2-bench's `results.json`
+output, and re-emits one JSONL record per trajectory in the schema the
+rest of this repo expects (Gate K1, probes, ledger construction all read
+this format).
+
+Confirmed tau2-bench output shape (verified 2026-09-17 against a real
+--save-to run on the GPU server, commit 2174a603f6d014ef94473ffa95957f6ce27100db):
+
+    data/simulations/<save_to>/results.json  (one file per `tau2 run` call)
+        {
+          "timestamp": ..., "info": {...}, "simulation_index": {...},
+          "tasks": [ {id, description, user_scenario, ticket,
+                      initial_state, evaluation_criteria, issues,
+                      required_documents, user_tools}, ... ],
+          "simulations": [
+            {
+              "id", "task_id", "trial", "seed", "duration",
+              "termination_reason", "agent_cost", "user_cost",
+              "reward_info": {
+                  "reward": 0.0 or 1.0,
+                  "db_check": {"db_match": bool, "db_reward": float},
+                  "action_checks": [ {"action": {...}, "action_match": bool,
+                                       "action_reward": float,
+                                       "tool_type": "read"|"write"}, ... ]
+              },
+              "messages": [
+                {
+                  "role": "assistant"|"user"|"tool",
+                  "content": str,  # NOTE: for Qwen3.8-27B this includes the
+                                   # model's raw reasoning trace inline, not
+                                   # just the final utterance -- see note below
+                  "tool_calls": [ {"id", "name", "arguments", "requestor"} ] or null,
+                  "turn_idx": int,
+                  "timestamp": str,
+                  "cost": float,
+                  "usage": {"completion_tokens": int, "prompt_tokens": int} or null,
+                  "error": bool,  # only present on role="tool" messages
+                }, ...
+              ],
+              ...
+            }, ...
+          ]
+        }
+
+Notes worth keeping in mind downstream (paper §8 threats-to-validity
+candidates):
+  - `usage` is null on non-assistant turns (user-simulator messages don't
+    report token counts in this tau2-bench version) -- cumulative_tokens
+    is therefore computed only from assistant-turn usage, which
+    undercounts user-simulator tokens actually in context. Note this as
+    an approximation, not a silent gap.
+  - `content` on assistant turns is NOT pure "what was said" -- Qwen3.8-27B
+    emits visible chain-of-thought reasoning inline before/around the
+    actual reply and before tool calls. This is arguably part of "agent
+    state" for the G-probe (protocol §4), but anyone building a goal-slot
+    decoder off `content` alone needs to know reasoning text is mixed in.
 
 Usage (dry run):
-    python -m src.rollout.generate --config configs/rollout_dryrun.yaml
+    python -m src.rollout.generate --config configs/rollout_dryrun.yaml --tau2-repo-path /path/to/tau2-bench
 
 Usage (full run, after dry run is verified):
-    python -m src.rollout.generate --config configs/rollout_full.yaml
+    python -m src.rollout.generate --config configs/rollout_full.yaml --tau2-repo-path /path/to/tau2-bench
 """
 from __future__ import annotations
 
@@ -19,6 +72,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from typing import Any
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -32,21 +86,27 @@ def get_tau2_commit(repo_path: str) -> str:
     return out.stdout.strip()
 
 
-def run_tau2(domain: str, agent_llm: str, user_llm: str, num_trials: int,
-             num_tasks: int | None, tau2_repo_path: str, seed: int) -> str:
-    """Invoke `tau2 run` for one domain, return path to its raw output dir.
+def run_tau2(domain: str, agent_llm: str, user_llm: str, num_tasks: int | None,
+             tau2_repo_path: str, seed: int, save_to: str) -> str:
+    """Invoke `tau2 run` for one domain/seed. Returns the path to the
+    results.json it writes (data/simulations/<save_to>/results.json,
+    resolved relative to tau2_repo_path since tau2 writes there).
 
-    tau2-bench writes its own results; this function only shells out and
-    locates the output. Adjust `--seed` flag name if tau2-bench's actual
-    CLI differs -- verify with `tau2 run --help` on the server first.
+    tau2-bench calls out to the LLM via LiteLLM's hosted_vllm provider;
+    the caller must have HOSTED_VLLM_API_BASE set in the environment
+    pointing at a running `vllm serve` instance with
+    --enable-auto-tool-choice --tool-call-parser qwen3_xml (confirmed
+    correct parser for Qwen3.8-27B / Qwen3_5ForConditionalGeneration --
+    NOT hermes, which is for a different tool-call format).
     """
     cmd = [
-        "tau2", "run",
+        "uv", "run", "tau2", "run",
         "--domain", domain,
         "--agent-llm", agent_llm,
         "--user-llm", user_llm,
-        "--num-trials", str(num_trials),
+        "--num-trials", "1",
         "--seed", str(seed),
+        "--save-to", save_to,
     ]
     if num_tasks is not None:
         cmd += ["--num-tasks", str(num_tasks)]
@@ -58,40 +118,88 @@ def run_tau2(domain: str, agent_llm: str, user_llm: str, num_trials: int,
             f"tau2 run failed for domain={domain} seed={seed}:\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
-    print(result.stdout, file=sys.stderr)
-    # tau2-bench's output location must be confirmed on the server --
-    # placeholder path, update after first dry-run invocation.
-    return os.path.join(tau2_repo_path, "results", domain)
+    print(result.stdout[-4000:], file=sys.stderr)  # tail only, this is verbose
+
+    results_path = os.path.join(tau2_repo_path, "data", "simulations", save_to, "results.json")
+    if not os.path.exists(results_path):
+        raise RuntimeError(f"Expected tau2 output at {results_path}, not found.")
+    return results_path
 
 
-def parse_tau2_trial(trial_path: str, domain: str, seed: int) -> dict | None:
-    """Parse one tau2-bench trial log into our trajectory schema.
+def _message_step_fields(msg: dict) -> dict:
+    """Extract the protocol §2.4 required per-step fields from one
+    tau2-bench message dict.
 
-    This is a stub -- the exact structure of tau2-bench's trial JSON must
-    be inspected on the server (it will be present after the first `tau2
-    run` invocation) and this function filled in to match. Field mapping
-    required, per protocol §2.4:
-
-        step_idx              <- index into the message/tool-call sequence
-        cumulative_tokens     <- running total, computed here if tau2
-                                  doesn't report it directly
-        tokens_added_this_step<- per-step delta
-        tool_name              <- from the tool-call message
-        tool_errored           <- bool, from the tool return status
-        message_role           <- user / agent / tool
-
-        task_id, domain, seed, goal_text, full_message_list,
-        programmatic_reward   <- tau2's own pass/fail grading (1/0)
-
-    Raise, do not silently return a malformed record -- the caller logs
-    exclusions explicitly (protocol §10: never silently drop trajectories).
+    Confirmed against real trial data: `role: "tool"` messages carry an
+    explicit `error: bool` field (verified both error=false cases; a
+    true case has not yet been observed in a sample trial, but the field
+    is unambiguously present and typed, so no guessing is involved).
+    Non-tool messages (assistant/user) have no `error` field and are not
+    tool errors by construction -- tool_errored is None for those rows,
+    not False, so "not a tool call" stays distinguishable from "tool
+    call that succeeded."
     """
-    raise NotImplementedError(
-        "Fill in after inspecting one real tau2-bench trial log on the "
-        "server. Do not guess the schema -- this is exactly the kind of "
-        "thing the dry run at --num-tasks 5 --num-trials 1 exists to "
-        "surface. Print the raw trial JSON structure first."
-    )
+    usage = msg.get("usage") or {}
+    tool_calls = msg.get("tool_calls") or []
+    role = msg["role"]
+    return {
+        "step_idx": msg["turn_idx"],
+        "message_role": role,
+        "tool_name": tool_calls[0]["name"] if tool_calls else None,
+        "tool_errored": msg.get("error") if role == "tool" else None,
+        "tokens_added_this_step": usage.get("completion_tokens", 0),
+        # prompt_tokens on an assistant turn already reflects cumulative
+        # context at that point; fall back to running total for turns
+        # with no usage reported (user/tool turns in this tau2-bench version).
+        "_prompt_tokens": usage.get("prompt_tokens"),
+        "content": msg.get("content"),
+        "tool_calls_raw": tool_calls,
+    }
+
+
+def parse_tau2_trial(sim: dict, task: dict, domain: str, seed: int, tau2_commit: str) -> dict:
+    """Convert one tau2-bench `simulations[i]` entry (+ its matching task
+    spec) into our trajectory schema. Raises on any structural surprise
+    rather than guessing -- protocol §10: never silently drop/corrupt.
+    """
+    messages = sim["messages"]
+    if not messages:
+        raise ValueError(f"simulation {sim.get('id')} has no messages")
+
+    steps = []
+    running_tokens = 0
+    for msg in messages:
+        f = _message_step_fields(msg)
+        if f["_prompt_tokens"] is not None:
+            # cumulative context size as reported at this assistant turn
+            running_tokens = f["_prompt_tokens"] + f["tokens_added_this_step"]
+        else:
+            running_tokens += f["tokens_added_this_step"]
+
+        steps.append({
+            "step_idx": f["step_idx"],
+            "cumulative_tokens": running_tokens,
+            "tokens_added_this_step": f["tokens_added_this_step"],
+            "tool_name": f["tool_name"],
+            "tool_errored": f["tool_errored"],
+            "message_role": f["message_role"],
+            "context_text": f["content"] or "",
+        })
+
+    reward_info = sim["reward_info"]
+    return {
+        "task_id": sim["task_id"],
+        "domain": domain,
+        "seed": seed,
+        "trial": sim.get("trial"),
+        "goal_text": task.get("description", ""),
+        "full_message_list": messages,
+        "programmatic_reward": reward_info["reward"],
+        "reward_info": reward_info,
+        "termination_reason": sim.get("termination_reason"),
+        "steps": steps,
+        "tau2_commit": tau2_commit,
+    }
 
 
 def main():
@@ -120,6 +228,14 @@ def main():
             file=sys.stderr,
         )
 
+    if "HOSTED_VLLM_API_BASE" not in os.environ:
+        raise RuntimeError(
+            "HOSTED_VLLM_API_BASE is not set. Start `vllm serve` on the "
+            "GPU node first (--enable-auto-tool-choice --tool-call-parser "
+            "qwen3_xml) and export HOSTED_VLLM_API_BASE=http://<node>:8000/v1 "
+            "before running this script."
+        )
+
     is_dry_run = "dry_run" in cfg
     run_cfg = cfg["dry_run"] if is_dry_run else cfg["full_run"]
     num_trials = run_cfg.get("num_trials", 1)
@@ -134,30 +250,37 @@ def main():
             "if you intend to regenerate."
         )
 
+    agent_llm = f"hosted_vllm/{cfg['model']['name']}"
+    user_llm = f"hosted_vllm/{cfg['model']['name']}"
+    run_tag = cfg["experiment"]
+
     n_written = 0
     with open(out_path, "w", encoding="utf-8") as out_f:
         for domain in cfg["domains"]:
             for seed in range(num_trials):
-                trial_dir = run_tau2(
+                save_to = f"{run_tag}_{domain}_seed{seed}_{uuid.uuid4().hex[:8]}"
+                results_path = run_tau2(
                     domain=domain,
-                    agent_llm=cfg["model"]["name"],
-                    user_llm=cfg["model"]["name"],
-                    num_trials=1,  # one seed at a time for clean per-seed dirs
+                    agent_llm=agent_llm,
+                    user_llm=user_llm,
                     num_tasks=num_tasks,
                     tau2_repo_path=args.tau2_repo_path,
                     seed=seed,
+                    save_to=save_to,
                 )
-                for fname in sorted(os.listdir(trial_dir)):
-                    trial_path = os.path.join(trial_dir, fname)
+
+                with open(results_path, "r", encoding="utf-8") as f:
+                    results = json.load(f)
+
+                tasks_by_id = {t["id"]: t for t in results["tasks"]}
+
+                for sim in results["simulations"]:
+                    trial_key = f"{domain}/{save_to}/{sim.get('id')}"
                     try:
-                        record = parse_tau2_trial(trial_path, domain, seed)
-                    except NotImplementedError:
-                        raise
+                        task = tasks_by_id[sim["task_id"]]
+                        record = parse_tau2_trial(sim, task, domain, seed, tau2_commit)
                     except Exception as e:
-                        log_exclusion(cfg["output_dir"], f"{domain}/{fname}", f"parse error: {e}")
-                        continue
-                    if record is None:
-                        log_exclusion(cfg["output_dir"], f"{domain}/{fname}", "parser returned None")
+                        log_exclusion(cfg["output_dir"], trial_key, f"parse error: {e}")
                         continue
 
                     missing = [
@@ -165,7 +288,7 @@ def main():
                         if f not in record
                     ]
                     if missing:
-                        log_exclusion(cfg["output_dir"], f"{domain}/{fname}", f"missing fields: {missing}")
+                        log_exclusion(cfg["output_dir"], trial_key, f"missing fields: {missing}")
                         continue
 
                     out_f.write(json.dumps(record) + "\n")
